@@ -2,15 +2,11 @@ import asyncio
 import configparser
 import logging
 import os
-import time
 from pathlib import Path
-import sys
 
 import aiohttp
 import pandas as pd
 from aiohttp import ClientSession
-from requests.exceptions import HTTPError
-
 
 ROOT_PATH = Path(os.path.abspath("")).parent
 DATA_PATH = Path(os.path.abspath("")).parent / "data"
@@ -34,8 +30,10 @@ COLUMNS = {
 }
 
 
-GOOGLE_BOOKS_API = config["google_books_api"]["url"]
-GOOGLE_BOOKS_KEY = config["google_books_api"]["key"]
+GOOGLE_BOOKS_API = config.get("google_books_api", "url")
+GOOGLE_BOOKS_KEY = config.get("google_books_api", "key")
+MAX_RESULTS_PER_QUERY = config.getint("google_books_api", "max_results_per_query")
+MAX_CONCURRENCY = config.getint("google_books_api", "max_concurrency")
 
 logging.basicConfig(
     filename="books_crawler.log",
@@ -47,152 +45,111 @@ logging.basicConfig(
 logger = logging.getLogger("books_crawler")
 logging.getLogger("chardet.charsetprober").disabled = True
 
+sem = asyncio.Semaphore(MAX_CONCURRENCY)
+
 
 def write_to_csv(response, output_path) -> None:
-    df_response = pd.DataFrame([response], columns=COLUMNS.keys())
+    df_response = pd.DataFrame(response, columns=COLUMNS.keys())
     df_response = df_response.astype(COLUMNS)
     df_response.to_csv(output_path, index=False)
 
 
-async def write_one(session, isbn10, isbn13) -> None:
-    """Write the found HREFs from `url` to `file`."""
-    response = await parse_response(session=session, isbn10=isbn10, isbn13=isbn13)
-    output_path = TEMP_DATA_PATH / (isbn10 + "_" + isbn13 + ".csv")
-    err_path = TEMP_DATA_PATH / (isbn10 + "_" + isbn13 + "_not_available")
-
-    if response:
-        write_to_csv(response, output_path)
-        logger.info(f"Wrote results for ISBNs: {isbn10, isbn13}")
-    else:
-        with open(err_path, "w") as f:
-            pass
-        logger.warning(f"Skipped ISBNs: {isbn10, isbn13}")
+async def get_and_write(session, query, output_path) -> None:
+    response = await parse_response(session=session, query=query)
+    write_to_csv(response, output_path)
+    logger.info(f"Wrote results for query: {query}")
 
 
-async def bulk_crawl_and_write(isbn_data) -> None:
-    """Crawl & write concurrently to `file` for multiple `urls`."""
-    sem = asyncio.Semaphore(10)
+def get_query(list_isbn, max_n=40):
+    for i in range(df_books.shape[0] // max_n):
+        start = i * max_n
+        end = max_n * (1 + i)
+        yield GOOGLE_BOOKS_API + "+OR+isbn:".join(
+            list_isbn[start:end]
+        ) + "&maxResults=40"
+
+
+async def create_coroutines(list_isbn) -> None:
     async with ClientSession() as session:
         tasks = []
-        for _, row in isbn_data.iterrows():
-            isbn10 = row["isbn"]
-            isbn13 = row["isbn13"]
-            output_path = TEMP_DATA_PATH / (isbn10 + "_" + isbn13 + ".csv")
-            err_path = TEMP_DATA_PATH / (isbn10 + "_" + isbn13 + "_not_available")
-
+        for idx, query in enumerate(get_query(list_isbn, max_n=MAX_RESULTS_PER_QUERY)):
+            output_path = TEMP_DATA_PATH / f"_part{idx:04d}.csv"
             if output_path.is_file():
-                logger.info(f"{isbn10, isbn13} already downloaded")
-            elif err_path.is_file():
-                logger.warning(
-                    f"Previous attempts at downloading data for {isbn10, isbn13} failed. Skipping for now."
-                )
+                logger.info(f"{output_path} Already downloaded. Will skip it.")
             else:
-                task = asyncio.ensure_future(
-                    write_one(session=session, isbn10=row["isbn"], isbn13=row["isbn13"])
+                task = asyncio.create_task(
+                    safe_get_and_write(
+                        session=session, query=query, output_path=output_path
+                    )
                 )
                 tasks.append(task)
         await asyncio.gather(*tasks)
 
 
+async def safe_get_and_write(session, query, output_path):
+    async with sem:
+        return await get_and_write(session, query, output_path)
+
+
 async def get_info_from_api(url: str, session: ClientSession):
-    """Get book information from specified API"""
     response = await session.request(
         method="GET", url=url, params={"key": GOOGLE_BOOKS_KEY}
     )
     response.raise_for_status()
     logger.info("Got response [%s] for URL: %s", response.status, url)
     response_json = await response.json()
-    return response_json["items"][0]["volumeInfo"]
+    items = response_json.get("items", {})
+    return items
 
 
-async def get_response_object(
-    session: ClientSession, isbn10: str = None, isbn13: str = None
-):
+async def parse_response(session: ClientSession, query):
 
-    if not isbn10 and not isbn13:
-        raise Exception("Missing values for ISBN")
-
-    if isbn13:
-        try:
-            response_isbn = await get_info_from_api(GOOGLE_BOOKS_API + isbn13, session)
-            return response_isbn
-        except KeyError as e:
-            logger.error(f"No info available for ISBN13: {isbn13}")
-
-    if isbn10:
-        logger.info(f"Will try using ISBN10: {isbn10}")
-        response_isbn = await get_info_from_api(GOOGLE_BOOKS_API + isbn10, session)
-        return response_isbn
-
-
-async def parse_response(
-    session: ClientSession, isbn10: str = None, isbn13: str = None
-):
-    """Extract books information using Google Books API"""
-
-    found = set()
+    books = []
 
     try:
-        response_fields = await get_response_object(
-            session=session, isbn10=isbn10, isbn13=isbn13
-        )
+        response = await get_info_from_api(query, session)
 
     except (aiohttp.ClientError, aiohttp.http_exceptions.HttpProcessingError) as e:
-
         status = getattr(e, "status", None)
-        message = getattr(e, 'message', None)
-        logger.error(
-            f"aiohttp exception for {isbn10, isbn13} [{status}]:{message}"
-        )
-
-        if status == "403":
-            time.sleep(5)
-            response_fields = await get_response_object(
-                session=session, isbn10=isbn10, isbn13=isbn13
-            )
-
-        return found
+        message = getattr(e, "message", None)
+        logger.error(f"aiohttp exception for {query} [{status}]:{message}")
+        return books
 
     except KeyError:
-        logger.error(f"No available data for: {isbn10, isbn13}")
-        return found
+        logger.error(f"No available data for: {query}")
+        return books
 
     except Exception as non_exp_err:
         logger.exception(
-            f"Non-expected exception occured for {isbn10, isbn13} :  {getattr(non_exp_err, '__dict__', {})}"
+            f"Non-expected exception occured for {query}:  {getattr(non_exp_err, '__dict__', {})}"
         )
-        return found
+        return books
 
     else:
+        for item in response:
+            books.append(
+                [
+                    None,
+                    None,
+                    item.get("title", None),
+                    item.get("subtitle", None),
+                    ";".join([author for author in item.get("authors", [None])]),
+                    ";".join([category for category in item.get("categories", [None])]),
+                    item.get("imageLinks", {}).get("thumbnail", None),
+                    item.get("description", None),
+                    item.get("publishedDate", "0000")[:4],
+                ]
+            )
 
-        title = response_fields.get("title", None)
-        subtitle = response_fields.get("subtitle", None)
-        authors = ";".join([author for author in response_fields.get("authors", [])])
-        categories = ";".join(
-            [category for category in response_fields.get("categories", [])]
-        )
-        thumbnail = response_fields.get("imageLinks", {}).get("thumbnail", None)
-        description = response_fields.get("description", None)
-        try:
-            published_year = response_fields.get("publishedDate", None)[:4]
-        except TypeError:
-            published_year = None
-
-        found = (
-            isbn10,
-            isbn13,
-            title,
-            subtitle,
-            authors,
-            categories,
-            thumbnail,
-            description,
-            published_year,
-        )
-        return found
+        return books
 
 
 if __name__ == "__main__":
     df_books = pd.read_csv(INPUT_DATA).query("language_code.str.startswith('en')")
-    df_books = df_books.head(10)
-    asyncio.run(bulk_crawl_and_write(isbn_data=df_books))
+    list_isbn = df_books["isbn13"][:40]
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(create_coroutines(list_isbn=list_isbn))
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
