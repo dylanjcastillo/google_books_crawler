@@ -26,7 +26,7 @@ COLUMNS = {
     "categories": str,
     "thumbnail": str,
     "description": str,
-    "published_year": int,
+    "published_year": str,
 }
 
 
@@ -61,10 +61,10 @@ async def get_and_write(session, query, output_path) -> None:
 
 
 def get_query(list_isbn, max_n=40):
-    for i in range(df_books.shape[0] // max_n):
+    for i in range(len(list_isbn) // max_n):
         start = i * max_n
         end = max_n * (1 + i)
-        yield GOOGLE_BOOKS_API + "+OR+isbn:".join(
+        yield GOOGLE_BOOKS_API + "?q=isbn:" + "+OR+isbn:".join(
             list_isbn[start:end]
         ) + "&maxResults=40"
 
@@ -102,6 +102,44 @@ async def get_info_from_api(url: str, session: ClientSession):
     return items
 
 
+def extract_fields(item):
+
+    volume_info = item.get("volumeInfo", None)
+    isbn_10 = None
+    isbn_13 = None
+    title = volume_info.get("title", None)
+    subtitle = volume_info.get("subtitle", None)
+    authors_list = [author for author in volume_info.get("authors", [])]
+    categories_list = [category for category in volume_info.get("categories", [])]
+    thumbnail = volume_info.get("imageLinks", {}).get("thumbnail", None)
+    description = volume_info.get("description", None)
+    published_date = volume_info.get("publishedDate", None)
+
+    for idx in volume_info.get("industryIdentifiers", {}):
+        type_idx = idx.get("type", None)
+        value_idx = idx.get("identifier", None)
+        if type_idx == "ISBN_10":
+            isbn_10 = value_idx
+        elif type_idx == "ISBN_13":
+            isbn_13 = value_idx
+
+    authors = ";".join(authors_list) if authors_list else None
+    categories = ";".join(categories_list) if categories_list else None
+    published_year = published_date[:4] if published_date else None
+
+    return (
+        isbn_10,
+        isbn_13,
+        title,
+        subtitle,
+        authors,
+        categories,
+        thumbnail,
+        description,
+        published_year,
+    )
+
+
 async def parse_response(session: ClientSession, query):
 
     books = []
@@ -127,26 +165,13 @@ async def parse_response(session: ClientSession, query):
 
     else:
         for item in response:
-            books.append(
-                [
-                    None,
-                    None,
-                    item.get("title", None),
-                    item.get("subtitle", None),
-                    ";".join([author for author in item.get("authors", [None])]),
-                    ";".join([category for category in item.get("categories", [None])]),
-                    item.get("imageLinks", {}).get("thumbnail", None),
-                    item.get("description", None),
-                    item.get("publishedDate", "0000")[:4],
-                ]
-            )
-
+            books.append(extract_fields(item))
         return books
 
 
 if __name__ == "__main__":
     df_books = pd.read_csv(INPUT_DATA).query("language_code.str.startswith('en')")
-    list_isbn = df_books["isbn13"][:40]
+    list_isbn = df_books["isbn13"].tolist()
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(create_coroutines(list_isbn=list_isbn))
