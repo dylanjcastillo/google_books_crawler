@@ -11,7 +11,7 @@ from aiohttp import ClientSession
 ROOT_PATH = Path(os.path.abspath("")).parent
 DATA_PATH = Path(os.path.abspath("")).parent / "data"
 INPUT_DATA = DATA_PATH / "raw" / "goodreads.csv"
-TEMP_DATA_PATH = DATA_PATH / "tmp"
+TMP_DATA_PATH = DATA_PATH / "tmp"
 OUTPUT_DATA = DATA_PATH / "processed" / "book_processed_data.csv"
 
 config = configparser.ConfigParser()
@@ -73,7 +73,7 @@ async def create_coroutines(list_isbn) -> None:
     async with ClientSession() as session:
         tasks = []
         for idx, query in enumerate(get_query(list_isbn, max_n=MAX_RESULTS_PER_QUERY)):
-            output_path = TEMP_DATA_PATH / f"_part{idx:04d}.csv"
+            output_path = TMP_DATA_PATH / f"_part{idx:04d}.csv"
             if output_path.is_file():
                 logger.info(f"{output_path} Already downloaded. Will skip it.")
             else:
@@ -125,7 +125,9 @@ def extract_fields(item):
 
     authors = ";".join(authors_list) if authors_list else None
     categories = ";".join(categories_list) if categories_list else None
-    published_year = published_date[:4] if published_date else None
+    published_year = (
+        published_date[:4] if published_date and published_date.isdigit() else None
+    )
 
     return (
         isbn_10,
@@ -169,6 +171,31 @@ async def parse_response(session: ClientSession, query):
         return books
 
 
+def merge_files():
+    csv_files = [
+        filename for filename in TMP_DATA_PATH.iterdir() if filename.suffix == ".csv"
+    ]
+    frames_list = []
+
+    logger.info(f"Merging previously downloaded files")
+    for filename in csv_files:
+        tmp_df = pd.read_csv(
+            filename,
+            index_col=None,
+            header=0,
+            na_values="None",
+            keep_default_na=True,
+            dtype=COLUMNS,
+        )
+        frames_list.append(tmp_df)
+
+    concat_df = pd.concat(frames_list, axis=0, ignore_index=True)
+    concat_df.to_csv(OUTPUT_DATA, index=False)
+    logger.info(
+        f"Resulting dataframe has been saved in the following location: {OUTPUT_DATA}"
+    )
+
+
 if __name__ == "__main__":
     df_books = pd.read_csv(INPUT_DATA).query("language_code.str.startswith('en')")
     list_isbn = df_books["isbn13"].tolist()
@@ -178,3 +205,4 @@ if __name__ == "__main__":
     finally:
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
+    merge_files()
