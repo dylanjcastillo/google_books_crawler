@@ -9,15 +9,17 @@ import pandas as pd
 from aiohttp import ClientSession
 
 ROOT_PATH = Path(os.path.abspath("")).parent
-DATA_PATH = Path(os.path.abspath("")).parent / "data"
-INPUT_DATA = DATA_PATH / "raw" / "goodreads.csv"
+DATA_PATH = ROOT_PATH / "data"
+INPUT_DATA = DATA_PATH / "input" / "goodreads.csv"
 TMP_DATA_PATH = DATA_PATH / "tmp"
-OUTPUT_DATA = DATA_PATH / "processed" / "book_processed_data.csv"
+OUTPUT_DATA = DATA_PATH / "output" / "book_processed_data.csv"
+OUTPUT_FULL_DATA = DATA_PATH / "output" / "books_data.csv"
 
 config = configparser.ConfigParser()
 config.read(ROOT_PATH / "config.ini")
 
-COLUMNS = {
+
+COLUMNS_OUTPUT = {
     "isbn10": str,
     "isbn13": str,
     "title": str,
@@ -26,7 +28,7 @@ COLUMNS = {
     "categories": str,
     "thumbnail": str,
     "description": str,
-    "published_year": str,
+    "published_year": "Int64",
 }
 
 
@@ -34,6 +36,7 @@ GOOGLE_BOOKS_API = config.get("google_books_api", "url")
 GOOGLE_BOOKS_KEY = config.get("google_books_api", "key")
 MAX_RESULTS_PER_QUERY = config.getint("google_books_api", "max_results_per_query")
 MAX_CONCURRENCY = config.getint("google_books_api", "max_concurrency")
+LANGUAGE = config.get("google_books_api", "language")
 
 logging.basicConfig(
     filename="books_crawler.log",
@@ -49,8 +52,8 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 
 def write_to_csv(response, output_path) -> None:
-    df_response = pd.DataFrame(response, columns=COLUMNS.keys())
-    df_response = df_response.astype(COLUMNS)
+    df_response = pd.DataFrame(response, columns=COLUMNS_OUTPUT.keys())
+    df_response = df_response.astype(COLUMNS_OUTPUT)
     df_response.to_csv(output_path, index=False)
 
 
@@ -66,7 +69,7 @@ def get_query(list_isbn, max_n=40):
         end = max_n * (1 + i)
         yield GOOGLE_BOOKS_API + "?q=isbn:" + "+OR+isbn:".join(
             list_isbn[start:end]
-        ) + "&maxResults=40"
+        ) + f"&maxResults={max_n}&langRestrict={LANGUAGE}"
 
 
 async def create_coroutines(list_isbn) -> None:
@@ -126,7 +129,7 @@ def extract_fields(item):
     authors = ";".join(authors_list) if authors_list else None
     categories = ";".join(categories_list) if categories_list else None
     published_year = (
-        published_date[:4] if published_date and published_date.isdigit() else None
+        published_date[:4] if published_date and published_date[:4].isdigit() else None
     )
 
     return (
@@ -185,7 +188,7 @@ def merge_files():
             header=0,
             na_values="None",
             keep_default_na=True,
-            dtype=COLUMNS,
+            dtype=COLUMNS_OUTPUT,
         )
         frames_list.append(tmp_df)
 
@@ -196,13 +199,50 @@ def merge_files():
     )
 
 
+def generate_full_df(df_books):
+
+    df_output = pd.read_csv(OUTPUT_DATA, dtype=COLUMNS_OUTPUT)
+
+    df_output["nulls"] = df_output.isnull().sum(axis=1)
+    df_reduced = (
+        df_output.query("~isbn13.isna()")
+        .sort_values("nulls")
+        .groupby("isbn13")
+        .first()
+        .reset_index()
+        .drop(["nulls"], axis=1)
+    )
+
+    df_result = pd.merge(
+        df_reduced,
+        df_books[["isbn13", "average_rating", "num_pages", "ratings_count"]],
+        how="left",
+        on="isbn13",
+    )
+    df_result.sort_values("ratings_count", ascending=False)
+    df_result.to_csv(OUTPUT_FULL_DATA, index=False)
+    logger.info(
+        f"Resulting dataframe has been saved in the following location: {OUTPUT_FULL_DATA}"
+    )
+
+
 if __name__ == "__main__":
     df_books = pd.read_csv(INPUT_DATA).query("language_code.str.startswith('en')")
+    df_books = df_books.rename(columns={"# num_pages": "num_pages"})
+    numeric_cols = ["num_pages", "ratings_count", "text_reviews_count"]
+    df_books[numeric_cols] = df_books[numeric_cols].apply(
+        pd.to_numeric, errors="coerce", axis=1
+    )
+
     list_isbn = df_books["isbn13"].tolist()
+
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(create_coroutines(list_isbn=list_isbn))
     finally:
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
+
     merge_files()
+
+    generate_full_df(df_books)
