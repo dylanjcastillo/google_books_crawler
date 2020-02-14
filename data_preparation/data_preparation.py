@@ -10,7 +10,8 @@ from aiohttp import ClientSession
 
 ROOT_PATH = Path(os.path.abspath("")).parent
 DATA_PATH = ROOT_PATH / "data"
-INPUT_DATA = DATA_PATH / "input" / "goodreads.csv"
+INPUT_PATH = DATA_PATH / "input"
+INPUT_DATA = DATA_PATH / "input" / "books.csv"
 TMP_DATA_PATH = DATA_PATH / "tmp"
 OUTPUT_DATA = DATA_PATH / "output" / "book_processed_data.csv"
 OUTPUT_FULL_DATA = DATA_PATH / "output" / "books_data.csv"
@@ -28,7 +29,7 @@ COLUMNS_OUTPUT = {
     "categories": str,
     "thumbnail": str,
     "description": str,
-    "published_year": "Int64",
+    "published_year": str,
 }
 
 
@@ -37,10 +38,12 @@ GOOGLE_BOOKS_KEY = config.get("google_books_api", "key")
 MAX_RESULTS_PER_QUERY = config.getint("google_books_api", "max_results_per_query")
 MAX_CONCURRENCY = config.getint("google_books_api", "max_concurrency")
 LANGUAGE = config.get("google_books_api", "language")
+KAGGLE_USER = config.get("kaggle", "username")
+KAGGLE_KEY = config.get("kaggle", "key")
 
 logging.basicConfig(
     filename="books_crawler.log",
-    filemode="w",
+    filemode="a",
     format="[%(levelname)s] %(name)s %(asctime)s %(message)s",
     level=logging.DEBUG,
     datefmt="%Y-%m-%d %H:%M:%S",
@@ -53,8 +56,7 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 def write_to_csv(response, output_path) -> None:
     df_response = pd.DataFrame(response, columns=COLUMNS_OUTPUT.keys())
-    df_response = df_response.astype(COLUMNS_OUTPUT)
-    df_response.to_csv(output_path, index=False)
+    df_response.to_csv(output_path, index=False, header=False)
 
 
 async def get_and_write(session, query, output_path) -> None:
@@ -226,13 +228,27 @@ def generate_full_df(df_books):
     )
 
 
+def download_data():
+    os.environ["KAGGLE_USERNAME"] = KAGGLE_USER
+    os.environ["KAGGLE_KEY"] = KAGGLE_KEY
+    import kaggle  # Fails if imported in the beginning
+
+    kaggle.api.dataset_download_files(
+        "jealousleopard/goodreadsbooks", path=INPUT_PATH, unzip=True
+    )
+
+
 if __name__ == "__main__":
-    df_books = pd.read_csv(INPUT_DATA).query("language_code.str.startswith('en')")
+    download_data()
+
+    df_books = pd.read_csv(INPUT_DATA, error_bad_lines=False)
+    df_books = df_books.query("language_code.str.startswith('en')")
     df_books = df_books.rename(columns={"# num_pages": "num_pages"})
     numeric_cols = ["num_pages", "ratings_count", "text_reviews_count"]
     df_books[numeric_cols] = df_books[numeric_cols].apply(
         pd.to_numeric, errors="coerce", axis=1
     )
+    df_books["isbn13"] = df_books["isbn13"].astype(str)
 
     list_isbn = df_books["isbn13"].tolist()
 
