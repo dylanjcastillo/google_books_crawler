@@ -13,12 +13,7 @@ DATA_PATH = ROOT_PATH / "data"
 INPUT_PATH = DATA_PATH / "input"
 INPUT_DATA = DATA_PATH / "input" / "books.csv"
 TMP_DATA_PATH = DATA_PATH / "tmp"
-OUTPUT_DATA = DATA_PATH / "output" / "book_processed_data.csv"
-OUTPUT_FULL_DATA = DATA_PATH / "output" / "books_data.csv"
-
-config = configparser.ConfigParser()
-config.read(ROOT_PATH / "config.ini")
-
+OUTPUT_FULL_DATA = DATA_PATH / "output" / "books_output.csv"
 
 COLUMNS_OUTPUT = {
     "isbn10": str,
@@ -32,6 +27,8 @@ COLUMNS_OUTPUT = {
     "published_year": str,
 }
 
+config = configparser.ConfigParser()
+config.read(ROOT_PATH / "config.ini")
 
 GOOGLE_BOOKS_API = config.get("google_books_api", "url")
 GOOGLE_BOOKS_KEY = config.get("google_books_api", "key")
@@ -52,10 +49,8 @@ logging.basicConfig(
 logger = logging.getLogger("books_crawler")
 logging.getLogger("chardet.charsetprober").disabled = True
 
-sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
-
-async def get_and_write(session, query, output_path) -> None:
+async def fetch_and_write(session, query, output_path) -> None:
     response = await parse_response(session=session, query=query)
     response_df = pd.DataFrame(response, columns=COLUMNS_OUTPUT.keys())
     response_df.to_csv(output_path, index=False)
@@ -85,7 +80,7 @@ async def create_coroutines(list_isbn) -> None:
                 logger.info(f"{output_path} Already downloaded. Will skip it.")
             else:
                 task = asyncio.create_task(
-                    restricted_safe_and_write(
+                    restricted_fetch_and_write(
                         session=session, query=query, output_path=output_path
                     )
                 )
@@ -93,9 +88,10 @@ async def create_coroutines(list_isbn) -> None:
         await asyncio.gather(*tasks)
 
 
-async def restricted_safe_and_write(session, query, output_path):
+async def restricted_fetch_and_write(session, query, output_path):
+    sem = asyncio.Semaphore(MAX_CONCURRENCY)
     async with sem:
-        return await get_and_write(session, query, output_path)
+        return await fetch_and_write(session, query, output_path)
 
 
 async def get_books_metadata(url: str, session: ClientSession):
@@ -265,8 +261,3 @@ if __name__ == "__main__":
     run_concurrently(list_isbn)
     generate_output_dataframe(books_df)
 
-# 1. Download data
-# 2. Read data
-# 3. Start and run asyncio event loop
-# 4. Merge files
-# 5. Generate full dataframe
