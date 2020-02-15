@@ -56,7 +56,7 @@ sem = asyncio.Semaphore(MAX_CONCURRENCY)
 
 def write_to_csv(response, output_path) -> None:
     df_response = pd.DataFrame(response, columns=COLUMNS_OUTPUT.keys())
-    df_response.to_csv(output_path, index=False, header=False)
+    df_response.to_csv(output_path, index=False)
 
 
 async def get_and_write(session, query, output_path) -> None:
