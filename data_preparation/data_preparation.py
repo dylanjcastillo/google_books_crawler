@@ -60,7 +60,7 @@ def write_to_csv(response, output_path) -> None:
 
 
 async def get_and_write(session, query, output_path) -> None:
-    response = await parse_response(session=session, query=query)
+    response = await handle_response(session=session, query=query)
     write_to_csv(response, output_path)
     logger.info(f"Wrote results for query: {query}")
 
@@ -147,65 +147,58 @@ def extract_fields(item):
     )
 
 
-async def parse_response(session: ClientSession, query):
-
+async def handle_response(session: ClientSession, query):
     books = []
-
     try:
         response = await get_info_from_api(query, session)
-
     except (aiohttp.ClientError, aiohttp.http_exceptions.HttpProcessingError) as e:
         status = getattr(e, "status", None)
         message = getattr(e, "message", None)
         logger.error(f"aiohttp exception for {query} [{status}]:{message}")
         return books
-
     except KeyError:
         logger.error(f"No available data for: {query}")
         return books
-
     except Exception as non_exp_err:
         logger.exception(
             f"Non-expected exception occured for {query}:  {getattr(non_exp_err, '__dict__', {})}"
         )
         return books
-
     else:
         for item in response:
             books.append(extract_fields(item))
         return books
 
 
-def merge_files():
+def concatenate_temp_files():
     csv_files = [
         filename for filename in TMP_DATA_PATH.iterdir() if filename.suffix == ".csv"
     ]
     frames_list = []
-
     logger.info(f"Merging previously downloaded files")
-    for filename in csv_files:
-        tmp_df = pd.read_csv(
-            filename,
-            index_col=None,
-            header=0,
-            na_values="None",
-            keep_default_na=True,
-            dtype=COLUMNS_OUTPUT,
-        )
-        frames_list.append(tmp_df)
-
-    concat_df = pd.concat(frames_list, axis=0, ignore_index=True)
-    concat_df.to_csv(OUTPUT_DATA, index=False)
-    logger.info(
-        f"Resulting dataframe has been saved in the following location: {OUTPUT_DATA}"
-    )
+    try:
+        for filename in csv_files:
+            tmp_df = pd.read_csv(
+                filename,
+                index_col=None,
+                header=0,
+                na_values="None",
+                keep_default_na=True,
+                dtype=COLUMNS_OUTPUT,
+            )
+            frames_list.append(tmp_df)
+        concat_df = pd.concat(frames_list, axis=0, ignore_index=True)
+    except Exception:
+        logger.exception(f"An error occured while merging the files!")
+        raise
+    logger.info(f"Successfully merged the files!")
+    return concat_df
 
 
 def generate_full_df(df_books):
-
-    df_output = pd.read_csv(OUTPUT_DATA, dtype=COLUMNS_OUTPUT)
-
-    df_output["nulls"] = df_output.isnull().sum(axis=1)
+    df_output = concatenate_temp_files()
+    df_output["nulls"] = df_output.isnull().sum(axis=1)  # Calculate nulls per row
+    # For repeated rows, get the one with the fewest nulls
     df_reduced = (
         df_output.query("~isbn13.isna()")
         .sort_values("nulls")
@@ -214,7 +207,6 @@ def generate_full_df(df_books):
         .reset_index()
         .drop(["nulls"], axis=1)
     )
-
     df_result = pd.merge(
         df_reduced,
         df_books[["isbn13", "average_rating", "num_pages", "ratings_count"]],
@@ -226,6 +218,7 @@ def generate_full_df(df_books):
     logger.info(
         f"Resulting dataframe has been saved in the following location: {OUTPUT_FULL_DATA}"
     )
+    logger.info(f"Shape of resulting dataframe: {df_result.shape}")
 
 
 def download_data():
@@ -238,20 +231,20 @@ def download_data():
     )
 
 
-if __name__ == "__main__":
-    download_data()
-
+def read_input_data():
     df_books = pd.read_csv(INPUT_DATA, error_bad_lines=False)
     df_books = df_books.query("language_code.str.startswith('en')")
     df_books = df_books.rename(columns={"# num_pages": "num_pages"})
+
     numeric_cols = ["num_pages", "ratings_count", "text_reviews_count"]
     df_books[numeric_cols] = df_books[numeric_cols].apply(
         pd.to_numeric, errors="coerce", axis=1
     )
-    df_books["isbn13"] = df_books["isbn13"].astype(str)
+    df_books["isbn13"] = df_books["isbn13"].astype(str)  # Assure isbn13 is read as str
+    return df_books, df_books["isbn13"].tolist()
 
-    list_isbn = df_books["isbn13"].tolist()
 
+def run_concurrently(list_isbn):
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(create_coroutines(list_isbn=list_isbn))
@@ -259,6 +252,15 @@ if __name__ == "__main__":
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
 
-    merge_files()
 
+if __name__ == "__main__":
+    download_data()
+    df_books, list_isbn = read_input_data()
+    run_concurrently(list_isbn)
     generate_full_df(df_books)
+
+# 1. Download data
+# 2. Read data
+# 3. Start and run asyncio event loop
+# 4. Merge files
+# 5. Generate full dataframe
