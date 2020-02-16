@@ -15,7 +15,6 @@ INPUT_DATA = INPUT_PATH / "books.csv"
 TMP_PATH = DATA_PATH / "tmp"
 OUTPUT_DATA = DATA_PATH / "output" / "books_output.csv"
 
-
 config = configparser.ConfigParser()
 config.read(ROOT_PATH / "config.ini")
 
@@ -39,15 +38,37 @@ logger = logging.getLogger("books_crawler")
 logging.getLogger("chardet.charsetprober").disabled = True
 
 
-def download_data():
-    os.environ["KAGGLE_USERNAME"] = KAGGLE_USER
-    os.environ["KAGGLE_KEY"] = KAGGLE_KEY
+def download_data(username, key, dataset, download_path):
+    """Download dataset using Kaggle's API
+
+    Parameters
+    ----------
+    username
+        Kaggle Username to download data
+    key
+        Kaggle's API Key
+    dataset
+        Name of dataset to download
+    download_path
+        Path where data will be downloaded
+    """
+    os.environ["KAGGLE_USERNAME"] = username
+    os.environ["KAGGLE_KEY"] = key
     import kaggle  # Fails if imported at the top of the file
 
-    kaggle.api.dataset_download_files(KAGGLE_DATASET, path=INPUT_PATH, unzip=True)
+    kaggle.api.dataset_download_files(dataset, path=download_path, unzip=True)
 
 
 class BooksCrawler:
+    """Crawler for books' metadata using asyncio Google Books API
+
+    Attributes
+    ----------
+    columns_output
+        Dictionary with expected columns and types
+    columns_output_names
+        Names of columns for the expected output
+    """
 
     columns_output = {
         "isbn10": str,
@@ -73,6 +94,28 @@ class BooksCrawler:
         max_concurrency,
         language,
     ):
+        """Initialize crawler with required parameters
+
+        Parameters
+        ----------
+        input_file
+            Path of input file
+        tmp_dir
+            Directory where temporary data will be downloaded
+        output_file
+            Path of output file
+        api_url
+            URL of Google Books API used for downloading data
+        api_key
+            Key of for API authentication
+        max_results_per_query
+            Maximum number of results that can be retrieved at a time
+        max_concurrency
+            Maximum number of open connections
+        language
+            Language used for restricting results when downloading data
+        """
+
         self.input_file = input_file
         self.tmp_dir = tmp_dir
         self.output_file = output_file
@@ -87,6 +130,17 @@ class BooksCrawler:
 
     @staticmethod
     def read_input(input_data):
+        """Read input data and do required pre-processing
+
+        Parameters
+        ----------
+        input_data
+            Path from where input data will be read
+
+        Returns
+        -------
+        Pandas dataframe with input data
+        """
         try:
             books_df = pd.read_csv(input_data, error_bad_lines=False)
             books_df = books_df.query("language_code.str.startswith('en')")
@@ -104,6 +158,12 @@ class BooksCrawler:
         return books_df
 
     def concatenate_tmp_files(self):
+        """Concatenate temporary files fetched from the API to generate output
+
+        Returns
+        -------
+        Pandas dataframe with all the results gotten from the API
+        """
         csv_files = [
             filename for filename in self.tmp_dir.iterdir() if filename.suffix == ".csv"
         ]
@@ -128,6 +188,7 @@ class BooksCrawler:
         return concat_df
 
     def write_output(self):
+        """Write resulting dataframe in disk"""
         output_df = self.concatenate_tmp_files()
         output_df["nulls"] = output_df.isnull().sum(axis=1)  # Calculate nulls per row
         reduced_df = (
@@ -152,6 +213,12 @@ class BooksCrawler:
         logger.info(f"Shape of resulting dataframe: {result_df.shape}")
 
     def get_queries(self):
+        """Generates the queries that will be used to download data from the API
+
+        Returns
+        -------
+        Index and query to be executed
+        """
         number_of_queries = len(self.list_isbn) // self.max_results_per_query
         for i in range(number_of_queries):
             start = i * self.max_results_per_query
@@ -165,6 +232,11 @@ class BooksCrawler:
             )
 
     async def fetch_all_books(self):
+        """Creates asyncio's tasks for downloading data
+        Returns
+        -------
+
+        """
         tasks = []
         for idx, query in self.get_queries():
             output_path = self.tmp_dir / f"_part{idx:04d}.csv"
@@ -181,17 +253,49 @@ class BooksCrawler:
         await self.session.close()
 
     async def restricted_fetch_and_write(self, query, output_path):
+        """Limit how many tasks can be executed in parallel (to match API's restrictions)
+
+        Parameters
+        ----------
+        query
+            Query that will be executed
+        output_path
+            Output path where result from query will be downloaded
+
+        Returns
+        -------
+        Function that executes API request
+        """
         sem = asyncio.Semaphore(self.max_concurrency)
         async with sem:
             return await self.fetch_and_write(query, output_path)
 
     async def fetch_and_write(self, query, output_path):
+        """Executes request and writes results in temporary directory
+
+        Parameters
+        ----------
+        query
+            Query that will be executed
+        output_path
+            Output path where result from query will be downloaded
+        """
         response = await self.parse_response(query)
         response_df = pd.DataFrame(response, columns=self.columns_output_names)
         response_df.to_csv(output_path, index=False)
         logger.info(f"Wrote results: {output_path}")
 
     async def parse_response(self, query):
+        """Handle error and parse response from API
+
+        Parameters
+        ----------
+        query
+            Query that will be executed
+        Returns
+        -------
+        List of books and their metadata extracted from the API response
+        """
         books = []
         try:
             response = await self.get_books_metadata(query)
@@ -214,6 +318,17 @@ class BooksCrawler:
             return books
 
     async def get_books_metadata(self, query):
+        """Make request to the API to get books's metadata
+
+        Parameters
+        ----------
+        query
+            Query that will be executed
+
+        Returns
+        -------
+        List of items obtained from the request's reponse
+        """
         response = await self.session.request(
             method="GET", url=query, params={"key": self.api_key}
         )
@@ -225,6 +340,17 @@ class BooksCrawler:
 
     @staticmethod
     def extract_fields_from_response(item):
+        """Extract relevant fields from the request's response
+
+        Parameters
+        ----------
+        item
+            Dictionary with the metadata obtained for each book
+        Returns
+        -------
+        Tuple with relevant information extracted from the response
+
+        """
         volume_info = item.get("volumeInfo", None)
         isbn_10 = None
         isbn_13 = None
@@ -266,6 +392,7 @@ class BooksCrawler:
 
 
 async def execute_crawler():
+    """Initialize and execute crawler"""
     crawler = BooksCrawler(
         input_file=INPUT_DATA,
         tmp_dir=TMP_PATH,
@@ -281,5 +408,10 @@ async def execute_crawler():
 
 
 if __name__ == "__main__":
-    download_data()
+    download_data(
+        username=KAGGLE_USER,
+        key=KAGGLE_KEY,
+        dataset=KAGGLE_DATASET,
+        download_path=INPUT_PATH,
+    )
     asyncio.run(execute_crawler())
