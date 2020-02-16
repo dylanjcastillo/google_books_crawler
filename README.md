@@ -1,5 +1,5 @@
-# Books Crawler
-This repository contains the code for a Python-based crawler that gets metadata from books using the Google Books API. It leverages asyncio and aiohttp for executing concurrent requests.
+# Google Books API Crawler
+This repository contains the code for a Python-based crawler that gets metadata from books using the Google Books API. Provided with a list of ISBNs, it leverages asyncio and aiohttp for executing concurrent requests to download the metadata associated wit those ISBNs. 
 
 ## How to use
 
@@ -13,9 +13,10 @@ This repository contains the code for a Python-based crawler that gets metadata 
 
 ## Limitations
 
+- This is not meant to crawl all the available books in the Google Books API. You need to provide a list of valid ISBNs (as in the Goodreads-books dataset) and the crawler will download the metadata associated with those books.
+- The intial Goodreads-books dataset contains ~12k books, however many of them do not return valid responses. It is possible to add different fields for doing the requests, so it should be possible to improve the number of matches. However, this is not yet implemented.
 - To avoid having timeouts on the request, you need to generate an API key in the Google Clould Platform Console. But don't worry it's **completely free**!
 - If you don't want to manually download the data, you'll need to generate a Token in Kaggle. [It is free and very easy to do!](https://adityashrm21.github.io/Setting-Up-Kaggle/)
-- The intial good books dataset contains ~12k books, however when using the ISBN for many of them, they don't return any values. It is possible to add different fields for doing the requests, so it should be possible to improve the number of matches (however that would require some manual checking of results)
 
 ## License
 
