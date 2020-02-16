@@ -11,21 +11,10 @@ from aiohttp import ClientSession
 ROOT_PATH = Path(os.path.abspath(""))
 DATA_PATH = ROOT_PATH / "data"
 INPUT_PATH = DATA_PATH / "input"
-INPUT_DATA = DATA_PATH / "input" / "books.csv"
-TMP_DATA_PATH = DATA_PATH / "tmp"
-OUTPUT_FULL_DATA = DATA_PATH / "output" / "books_output.csv"
+INPUT_DATA = INPUT_PATH / "books.csv"
+TMP_PATH = DATA_PATH / "tmp"
+OUTPUT_DATA = DATA_PATH / "output" / "books_output.csv"
 
-COLUMNS_OUTPUT = {
-    "isbn10": str,
-    "isbn13": str,
-    "title": str,
-    "subtitle": str,
-    "authors": str,
-    "categories": str,
-    "thumbnail": str,
-    "description": str,
-    "published_year": str,
-}
 
 config = configparser.ConfigParser()
 config.read(ROOT_PATH / "config.ini")
@@ -59,8 +48,40 @@ def download_data():
 
 
 class BooksCrawler:
-    def __init__(self):
-        self.books_df = self.read_input(INPUT_DATA)
+
+    columns_output = {
+        "isbn10": str,
+        "isbn13": str,
+        "title": str,
+        "subtitle": str,
+        "authors": str,
+        "categories": str,
+        "thumbnail": str,
+        "description": str,
+        "published_year": str,
+    }
+    columns_output_names = [*columns_output]
+
+    def __init__(
+        self,
+        input_file,
+        tmp_dir,
+        output_file,
+        api_url,
+        api_key,
+        max_results_per_query,
+        max_concurrency,
+        language,
+    ):
+        self.input_file = input_file
+        self.tmp_dir = tmp_dir
+        self.output_file = output_file
+        self.api_url = api_url
+        self.api_key = api_key
+        self.max_results_per_query = max_results_per_query
+        self.max_concurrency = max_concurrency
+        self.language = language
+        self.books_df = self.read_input(self.input_file)
         self.list_isbn = self.books_df["isbn13"].tolist()
         self.session = ClientSession()
 
@@ -70,7 +91,6 @@ class BooksCrawler:
             books_df = pd.read_csv(input_data, error_bad_lines=False)
             books_df = books_df.query("language_code.str.startswith('en')")
             books_df = books_df.rename(columns={"# num_pages": "num_pages"})
-
             numeric_cols = ["num_pages", "ratings_count", "text_reviews_count"]
             books_df[numeric_cols] = books_df[numeric_cols].apply(
                 pd.to_numeric, errors="coerce", axis=1
@@ -83,12 +103,9 @@ class BooksCrawler:
             raise
         return books_df
 
-    @staticmethod
-    def concatenate_tmp_files(tmp_directory):
+    def concatenate_tmp_files(self):
         csv_files = [
-            filename
-            for filename in tmp_directory.iterdir()
-            if filename.suffix == ".csv"
+            filename for filename in self.tmp_dir.iterdir() if filename.suffix == ".csv"
         ]
         frames_list = []
         logger.info(f"Merging previously downloaded files")
@@ -100,7 +117,7 @@ class BooksCrawler:
                     header=0,
                     na_values="None",
                     keep_default_na=True,
-                    dtype=COLUMNS_OUTPUT,
+                    dtype=self.columns_output,
                 )
                 frames_list.append(tmp_df)
             concat_df = pd.concat(frames_list, axis=0, ignore_index=True)
@@ -111,7 +128,7 @@ class BooksCrawler:
         return concat_df
 
     def write_output(self):
-        output_df = self.concatenate_tmp_files(TMP_DATA_PATH)
+        output_df = self.concatenate_tmp_files()
         output_df["nulls"] = output_df.isnull().sum(axis=1)  # Calculate nulls per row
         reduced_df = (
             output_df.query("~isbn13.isna()")
@@ -128,29 +145,29 @@ class BooksCrawler:
             on="isbn13",
         )
         result_df.sort_values("ratings_count", ascending=False)
-        result_df.to_csv(OUTPUT_FULL_DATA, index=False)
+        result_df.to_csv(self.output_file, index=False)
         logger.info(
-            f"Resulting dataframe has been saved in the following location: {OUTPUT_FULL_DATA}"
+            f"Resulting dataframe has been saved in the following location: {self.output_file}"
         )
         logger.info(f"Shape of resulting dataframe: {result_df.shape}")
 
-    def get_queries(self, max_n=40):
-        number_of_queries = len(self.list_isbn) // max_n
+    def get_queries(self):
+        number_of_queries = len(self.list_isbn) // self.max_results_per_query
         for i in range(number_of_queries):
-            start = i * max_n
-            end = max_n * (1 + i)
+            start = i * self.max_results_per_query
+            end = self.max_results_per_query * (1 + i)
             yield (
                 i,
-                GOOGLE_BOOKS_API
+                self.api_url
                 + "?q=isbn:"
                 + "+OR+isbn:".join(self.list_isbn[start:end])
-                + f"&maxResults={max_n}&langRestrict={LANGUAGE}",
+                + f"&maxResults={self.max_results_per_query}&langRestrict={self.language}",
             )
 
     async def fetch_all_books(self):
         tasks = []
         for idx, query in self.get_queries():
-            output_path = TMP_DATA_PATH / f"_part{idx:04d}.csv"
+            output_path = self.tmp_dir / f"_part{idx:04d}.csv"
             if output_path.is_file():
                 logger.info(f"{output_path} Already downloaded. Will skip it.")
             else:
@@ -164,13 +181,13 @@ class BooksCrawler:
         await self.session.close()
 
     async def restricted_fetch_and_write(self, query, output_path):
-        sem = asyncio.Semaphore(MAX_CONCURRENCY)
+        sem = asyncio.Semaphore(self.max_concurrency)
         async with sem:
             return await self.fetch_and_write(query, output_path)
 
     async def fetch_and_write(self, query, output_path):
         response = await self.parse_response(query)
-        response_df = pd.DataFrame(response, columns=COLUMNS_OUTPUT.keys())
+        response_df = pd.DataFrame(response, columns=self.columns_output_names)
         response_df.to_csv(output_path, index=False)
         logger.info(f"Wrote results: {output_path}")
 
@@ -198,7 +215,7 @@ class BooksCrawler:
 
     async def get_books_metadata(self, query):
         response = await self.session.request(
-            method="GET", url=query, params={"key": GOOGLE_BOOKS_KEY}
+            method="GET", url=query, params={"key": self.api_key}
         )
         response.raise_for_status()
         logger.info("Got response [%s] for URL: %s", response.status, query)
@@ -249,7 +266,16 @@ class BooksCrawler:
 
 
 async def execute_crawler():
-    crawler = BooksCrawler()
+    crawler = BooksCrawler(
+        input_file=INPUT_DATA,
+        tmp_dir=TMP_PATH,
+        output_file=OUTPUT_DATA,
+        api_url=GOOGLE_BOOKS_API,
+        api_key=GOOGLE_BOOKS_KEY,
+        max_results_per_query=MAX_RESULTS_PER_QUERY,
+        max_concurrency=MAX_CONCURRENCY,
+        language=LANGUAGE,
+    )
     await crawler.fetch_all_books()
     crawler.write_output()
 
