@@ -14,5 +14,5 @@ This repository contains the code for a Python-based crawler that gets metadata 
 ## Limitations
 
 - To avoid having timeouts on the request, you need to generate an API key in the Google Clould Platform Console. But don't worry it's **completely free**!
-- If you don't want to manually download the data, you'll need to generate a Token in Kaggle. [It is free and very easy to do!] (https://adityashrm21.github.io/Setting-Up-Kaggle/)
+- If you don't want to manually download the data, you'll need to generate a Token in Kaggle. [It is free and very easy to do!](https://adityashrm21.github.io/Setting-Up-Kaggle/)
 - The intial good books dataset contains ~12k books, however when using the ISBN for many of them, they don't return any values. It is possible to add different fields for doing the requests, so it should be possible to improve the number of matches (however that would require some manual checking of results)
