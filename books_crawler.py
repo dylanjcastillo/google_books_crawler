@@ -18,18 +18,6 @@ TMP_PATH = DATA_PATH / "tmp"
 OUTPUT_PATH = DATA_PATH / "output"
 OUTPUT_DATA = OUTPUT_PATH / "books_output.csv"
 
-config = configparser.ConfigParser()
-config.read(ROOT_PATH / "config.ini")
-
-GOOGLE_BOOKS_API = config.get("google_books_api", "url")
-GOOGLE_BOOKS_KEY = config.get("google_books_api", "key")
-MAX_RESULTS_PER_QUERY = config.getint("google_books_api", "max_results_per_query")
-MAX_CONCURRENCY = config.getint("google_books_api", "max_concurrency")
-LANGUAGE = config.get("google_books_api", "language")
-KAGGLE_USER = config.get("kaggle", "username")
-KAGGLE_KEY = config.get("kaggle", "key")
-KAGGLE_DATASET = config.get("kaggle", "dataset")
-
 logging.basicConfig(
     filename="books_crawler.log",
     filemode="w",
@@ -39,6 +27,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger("books_crawler")
 logging.getLogger("chardet.charsetprober").disabled = True
+
+config = configparser.ConfigParser()
+try:
+    config.read_file(ROOT_PATH / "config.ini")
+except Exception as err:
+    logger.exception("You need to create a config.ini file before executing!")
+    raise
+GOOGLE_BOOKS_API = config.get("google_books_api", "url")
+GOOGLE_BOOKS_KEY = config.get("google_books_api", "key")
+MAX_RESULTS_PER_QUERY = config.getint("google_books_api", "max_results_per_query")
+MAX_CONCURRENCY = config.getint("google_books_api", "max_concurrency")
+LANGUAGE = config.get("google_books_api", "language")
+KAGGLE_USER = config.get("kaggle", "username")
+KAGGLE_KEY = config.get("kaggle", "key")
+KAGGLE_DATASET = config.get("kaggle", "dataset")
 
 
 def download_data(username, key, dataset, download_path):
