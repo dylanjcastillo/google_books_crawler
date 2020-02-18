@@ -1,4 +1,6 @@
 import asyncio
+import shutil
+import argparse
 import configparser
 import logging
 import os
@@ -13,7 +15,8 @@ DATA_PATH = ROOT_PATH / "data"
 INPUT_PATH = DATA_PATH / "input"
 INPUT_DATA = INPUT_PATH / "books.csv"
 TMP_PATH = DATA_PATH / "tmp"
-OUTPUT_DATA = DATA_PATH / "output" / "books_output.csv"
+OUTPUT_PATH = DATA_PATH / "output"
+OUTPUT_DATA = OUTPUT_PATH / "books_output.csv"
 
 config = configparser.ConfigParser()
 config.read(ROOT_PATH / "config.ini")
@@ -407,7 +410,30 @@ async def execute_crawler():
     crawler.write_output()
 
 
-if __name__ == "__main__":
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        prog="books-crawler", description="Crawl books' metadata using Google Books API"
+    )
+    parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clears cache from previous executions",
+    )
+    args = parser.parse_args()
+    return args
+
+
+def main(args):
+    INPUT_PATH.mkdir(parents=True, exist_ok=True)
+    OUTPUT_PATH.mkdir(exist_ok=True)
+    if args.clear_cache:
+        try:
+            shutil.rmtree(TMP_PATH)
+            logger.info("Cache was cleared!")
+        except Exception as err:
+            logger.info("There is no cache to clear!")
+    TMP_PATH.mkdir(exist_ok=True)
+
     download_data(
         username=KAGGLE_USER,
         key=KAGGLE_KEY,
@@ -415,3 +441,8 @@ if __name__ == "__main__":
         download_path=INPUT_PATH,
     )
     asyncio.run(execute_crawler())
+
+
+if __name__ == "__main__":
+    arguments = parse_arguments()
+    main(arguments)
