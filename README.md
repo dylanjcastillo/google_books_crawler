@@ -9,7 +9,10 @@ This repository contains the code for a Python-based crawler that gets metadata 
 3. Go to the [GCP Console and generate new API key](https://console.cloud.google.com/apis/credentials)
 4. Go to your Kaggle's account and generate an API token
 5. Fill the required fields in the *config_example.ini* file and save it as *config.ini*
-5. Go to the Execute crawler from the command line: ```python books_crawler.py```
+5. Execute crawler from the command line: 
+    - Regular execution: ```python books_crawler.py```
+    - Clearing cache execution: ```python books_crawler.py --clear-cache```
+    - Get help on how to run the crawler: ```python books_crawler.py --help```
 
 ## Limitations
 
