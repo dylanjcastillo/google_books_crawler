@@ -50,6 +50,7 @@ async def execute_crawler():
 
 
 def parse_arguments():
+    """Parse arguments when executed from CLI"""
     parser = argparse.ArgumentParser(
         prog="books-crawler", description="Crawl books' metadata using Google Books API"
     )
