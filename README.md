@@ -1,3 +1,4 @@
+![](crawler_cover.jpg)
 # Google Books API Crawler
 ![Python](https://img.shields.io/badge/Python-v3.7.1-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue)
 
