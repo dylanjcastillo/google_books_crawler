@@ -1,68 +1,10 @@
 import asyncio
-import shutil
-import argparse
-import configparser
-import logging
-import os
-from pathlib import Path
 
 import aiohttp
 import pandas as pd
 from aiohttp import ClientSession
 
-ROOT_PATH = Path(os.path.abspath(""))
-DATA_PATH = ROOT_PATH / "data"
-INPUT_PATH = DATA_PATH / "input"
-INPUT_DATA = INPUT_PATH / "books.csv"
-TMP_PATH = DATA_PATH / "tmp"
-OUTPUT_PATH = DATA_PATH / "output"
-OUTPUT_DATA = OUTPUT_PATH / "books_output.csv"
-
-logging.basicConfig(
-    filename="books_crawler.log",
-    filemode="w",
-    format="[%(levelname)s] %(name)s %(asctime)s %(message)s",
-    level=logging.DEBUG,
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger("books_crawler")
-logging.getLogger("chardet.charsetprober").disabled = True
-
-config = configparser.ConfigParser()
-try:
-    config.read_file(ROOT_PATH / "config.ini")
-except Exception as err:
-    logger.exception("You need to create a config.ini file before executing!")
-    raise
-GOOGLE_BOOKS_API = config.get("google_books_api", "url")
-GOOGLE_BOOKS_KEY = config.get("google_books_api", "key")
-MAX_RESULTS_PER_QUERY = config.getint("google_books_api", "max_results_per_query")
-MAX_CONCURRENCY = config.getint("google_books_api", "max_concurrency")
-LANGUAGE = config.get("google_books_api", "language")
-KAGGLE_USER = config.get("kaggle", "username")
-KAGGLE_KEY = config.get("kaggle", "key")
-KAGGLE_DATASET = config.get("kaggle", "dataset")
-
-
-def download_data(username, key, dataset, download_path):
-    """Download dataset using Kaggle's API
-
-    Parameters
-    ----------
-    username
-        Kaggle Username to download data
-    key
-        Kaggle's API Key
-    dataset
-        Name of dataset to download
-    download_path
-        Path where data will be downloaded
-    """
-    os.environ["KAGGLE_USERNAME"] = username
-    os.environ["KAGGLE_KEY"] = key
-    import kaggle  # Fails if imported at the top of the file
-
-    kaggle.api.dataset_download_files(dataset, path=download_path, unzip=True)
+from utils import logger
 
 
 class BooksCrawler:
@@ -395,57 +337,3 @@ class BooksCrawler:
             description,
             published_year,
         )
-
-
-async def execute_crawler():
-    """Initialize and execute crawler"""
-    crawler = BooksCrawler(
-        input_file=INPUT_DATA,
-        tmp_dir=TMP_PATH,
-        output_file=OUTPUT_DATA,
-        api_url=GOOGLE_BOOKS_API,
-        api_key=GOOGLE_BOOKS_KEY,
-        max_results_per_query=MAX_RESULTS_PER_QUERY,
-        max_concurrency=MAX_CONCURRENCY,
-        language=LANGUAGE,
-    )
-    await crawler.fetch_all_books()
-    crawler.write_output()
-
-
-def parse_arguments():
-    parser = argparse.ArgumentParser(
-        prog="books-crawler", description="Crawl books' metadata using Google Books API"
-    )
-    parser.add_argument(
-        "--clear-cache",
-        action="store_true",
-        help="Clears cache from previous executions",
-    )
-    args = parser.parse_args()
-    return args
-
-
-def main(args):
-    INPUT_PATH.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.mkdir(exist_ok=True)
-    if args.clear_cache:
-        try:
-            shutil.rmtree(TMP_PATH)
-            logger.info("Cache was cleared!")
-        except Exception as err:
-            logger.info("There is no cache to clear!")
-    TMP_PATH.mkdir(exist_ok=True)
-
-    download_data(
-        username=KAGGLE_USER,
-        key=KAGGLE_KEY,
-        dataset=KAGGLE_DATASET,
-        download_path=INPUT_PATH,
-    )
-    asyncio.run(execute_crawler())
-
-
-if __name__ == "__main__":
-    arguments = parse_arguments()
-    main(arguments)
