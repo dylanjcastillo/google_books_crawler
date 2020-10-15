@@ -1,6 +1,6 @@
 ![](crawler_cover_new.jpg)
 # Google Books API Crawler
-![Python](https://img.shields.io/badge/Python-v3.7.1-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue)
+![Python](https://img.shields.io/badge/Python-v3.7.1-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue) [![Twitter](https://img.shields.io/twitter/url/https/twitter.com/_dylancastillo.svg?style=social&label=Follow%20%40_dylancastillo)](https://twitter.com/_dylancastillo)
 
 This repository contains the code for a Python-based crawler that gets metadata from books using the Google Books API. Provided with a list of ISBNs, it leverages asyncio and aiohttp for executing concurrent requests to download the metadata associated with those ISBNs. 
 
